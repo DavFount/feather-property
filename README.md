@@ -1,0 +1,250 @@
+# Feather Property
+
+The authoritative registry of persistent real property for the Feather
+Framework: houses, hotel rooms, business premises, and the legal interests in
+them (owners and tenants). Property owns each property's identity, stable key,
+type, status, interests and their validity periods, and versioned metadata, and
+keeps an audit trail of every change.
+
+Property does not own gameplay. Interiors, doors, furniture, prices, purchase
+menus, mortgages, taxes and hotel check-in stay in the gameplay resources, which
+ask Property who owns or rents what and record those changes through it. Money
+moves only in feather-economy; storage lives in feather-inventory.
+
+## Status
+
+Version 0.1.0, a pre-release of Feather Contract 1. The release and lifecycle
+acceptance tests pass. A housing integration (purchases, rentals, sales between
+players and back to an agent, hotel rooms, suspension for unpaid tax) is built
+on it. The API may still change before Contract 1 is frozen; the freeze
+follows a second integration (doors and storage, or business premises).
+
+## Requirements
+
+```text
+feather-mysql
+feather-core
+```
+
+At runtime, character holders resolve through the `character-profile` provider
+(feather-character), and organization holders through feather-organizations
+when that holder type is used. Service policy is decided by Core's default
+policy provider (feather-admin).
+
+## Installation
+
+1. Place the resource in `resources/[feather]/feather-property`.
+2. Start it after Core, Character and Organizations, and before feather-admin
+   and the resources that use it:
+
+   ```cfg
+   ensure feather-mysql
+   ensure feather-core
+   ensure feather-character
+   ensure feather-organizations
+   ensure feather-property
+   ensure feather-admin
+   ```
+
+3. Trust each resource that uses Property (see
+   [Configuration and access](#configuration-and-access)) and restart
+   feather-property and feather-admin.
+
+The first start applies three checksummed migrations and logs
+`event=startup.ready migrationsApplied=3 routes=1`. Later starts apply none.
+
+## Verification
+
+Read-only, safe on a live server:
+
+```text
+PropertyReleaseContractSmokeTest
+```
+
+Expect 10/10 with `Config.DevMode = false`.
+
+The lifecycle test changes data, so it runs only with `Config.DevMode = true` on
+a development server. Nobody needs to be online: pass two different characters
+as character UUIDs (or server IDs of connected players).
+
+```text
+PropertyLifecycleSmokeTest <serverId|characterUuid> <otherServerId|otherCharacterUuid>
+```
+
+Expect 33/33. It registers a uniquely keyed test house, grants co-owners and a
+tenancy that expires after three seconds, races two transfers, then suspends and
+retires the house. The test runs as feather-property, so while it runs it needs
+both Property policy actions granted to `feather-property`
+(`Config.servicePolicy['feather-property']['feather-property']`). Remove that
+grant, set DevMode back to `false` and restart afterwards.
+
+## Model
+
+- **Property:** `propertyId` (UUID), `propertyKey` (stable, namespaced by the
+  registering resource, for example `my-housing:house0`), `propertyType`,
+  `label`, `status`, the managing resource, owner and tenant caps, and versioned
+  metadata.
+- **Property types** (`Config.PropertyTypes`): `house` (up to 4 owners, 1
+  tenant), `hotel_room` (tenants only, up to 256), `business` (organizations). A
+  property may lower the caps when it is registered.
+- **Status:** `active`; `suspended` (keeps its interests, gains none and cannot
+  change owner, for example for unpaid tax or a seizure under review);
+  `retired` (terminal, ends every interest in the same commit).
+- **Interests:** `owner` and `tenant`, held by a `character` or
+  `organization`. One holder has at most one active interest of each type per
+  property, and owners and tenants stay within the caps. A tenancy may have a
+  `validUntil`: it stops counting at that moment, and the expiry sweep ends it
+  and records `property.tenancy_expired`.
+
+## Server exports
+
+All exports return `{ ok = true, value = ... }` or
+`{ ok = false, code, message, details }`. The caller is the Cfx invoking
+resource and must be in the matching `Config.Access` group. A client can never
+supply a resource, account or character identity.
+
+Every mutation takes a stable `requestId` (at most 128 characters) and a
+namespaced `reasonCode` such as `housing.purchase`. Optional fields:
+
+- `actorSource`: the player who triggered the change. Property derives that
+  player's account and character from Core.
+- `correlationId`.
+- `referenceType` + `referenceId`: the caller's record behind the change.
+
+Retrying a request ID with the same payload replays the stored result with
+`replayed = true`; reusing it with a different payload returns
+`idempotency_conflict`. Changes to an existing property take its
+`expectedRevision`.
+
+### Mutations
+
+Trusted managers only; each property can be changed only by its managing
+resource or a privileged manager.
+
+| Export | Fields |
+|---|---|
+| `RegisterProperty` | `propertyKey`, `propertyType`, `label`, optional `maxOwners`, `maxTenants`, `metadataVersion`, `metadata`. The caller becomes the manager; the property starts with no interests. |
+| `ChangePropertyStatus` | `propertyId`, `expectedRevision`, `status` |
+| `UpdatePropertyMetadata` | `propertyId`, `expectedRevision`, and `label` and/or `metadataVersion` + `metadata` (`false` clears) |
+| `GrantInterest` | `propertyId`, `expectedRevision`, `holderType`, `holderId`, `interestType`, optional `validUntil` (Unix ms) |
+| `EndInterest` | `propertyId`, `expectedRevision`, `interestId` |
+| `TransferOwnership` | `propertyId`, `expectedRevision`, `toHolderType`, `toHolderId`, optional `fromHolderType` + `fromHolderId` (must be a current owner). Ends every owner interest and grants one; tenancies are kept. |
+
+### Reads
+
+Trusted readers.
+
+| Export | Returns |
+|---|---|
+| `GetProperty({ propertyId })`, `FindPropertyByKey({ propertyKey })` | The property with its current `owners` and `tenants` |
+| `ListPropertiesByHolder({ holderType, holderId, interestType?, propertyType?, includeMetadata?, limit?, cursor? })` | Properties in which the holder has an effective interest |
+| `CheckInterest({ propertyId \| propertyKey, holderType, holderId, interestType? })` | `{ matched, interests, propertyStatus }`. Facts only; the caller decides what they permit. |
+| `FindOperation({ requestId })` | The caller's stored result, for recovery after a timeout |
+| `InspectPropertyHistory({ propertyId, limit?, cursor? })` | Audit trail (trusted auditors; managers read their own properties, privileged auditors any) |
+
+Lifecycle: `GetCapabilities()`, `GetHealth()`, `AwaitReady(timeoutMs)`.
+
+### Failure codes
+
+`authorization_denied`, `policy_unavailable`, `revision_conflict`
+(`details.revision`), `idempotency_conflict`, `property_exists`,
+`property_not_found`, `property_retired`, `property_unavailable`,
+`interest_exists`, `interest_limit`, `interest_not_found`, `holder_mismatch`,
+`holder_not_found`, `no_change`, and `transaction_failed` (retry with the same
+request ID, or call `FindOperation` first).
+
+## Example
+
+```lua
+local Property = exports['feather-property']
+
+-- Register a configured house once (replays on restart).
+local house = Property:RegisterProperty({
+    requestId = 'register:house0', propertyKey = 'my-housing:house0',
+    propertyType = 'house', label = 'Strawberry House', maxOwners = 3,
+    reasonCode = 'housing.setup'
+})
+
+-- Purchase: after the Economy payment committed.
+Property:TransferOwnership({
+    requestId = ('purchase:%s'):format(orderId),
+    propertyId = house.value.propertyId, expectedRevision = house.value.revision,
+    toHolderType = 'character', toHolderId = buyerCharacterId,
+    reasonCode = 'housing.purchase', referenceType = 'housing_order', referenceId = orderId,
+    actorSource = source
+})
+
+-- A door or storage check.
+local check = Property:CheckInterest({
+    propertyKey = 'my-housing:house0', holderType = 'character', holderId = characterId
+})
+if check.ok and check.value.matched and check.value.propertyStatus == 'active' then
+    -- allowed by the calling resource's own rule
+end
+```
+
+## Client route
+
+`property.held.list.v1` takes `{ propertyType? }` and returns the calling
+player's properties with only their own interests. It requires an active
+character and is rate limited. Clients cannot change anything.
+
+## Events
+
+Each change is written to `feather_property_events` and
+`feather_property_outbox` in the same transaction, then published through Core:
+
+```text
+property.property.registered.v1
+property.status.changed.v1
+property.metadata.revised.v1
+property.interest.granted.v1
+property.interest.ended.v1
+property.ownership.transferred.v1
+```
+
+Payloads are at most 4096 bytes and never carry metadata.
+
+## Configuration and access
+
+`Config.Access` groups: `trustedReaders`, `trustedManagers` (with
+`privilegedManagers`), `trustedAuditors` (with `privilegedAuditors`). A
+privileged entry must also be in its trusted group.
+
+To let a resource (here `my-housing`) manage properties, add it to the reader,
+manager and auditor groups in `config.lua`:
+
+```lua
+trustedReaders  = { ['my-housing'] = true, ... },
+trustedManagers = { ['my-housing'] = true, ... },
+trustedAuditors = { ['my-housing'] = true, ... },
+```
+
+Trust alone does not allow changes. Grant the policy actions in
+feather-admin's `configs/service_policy.lua`:
+
+```lua
+Config.servicePolicy['feather-property'] = {
+    ['my-housing'] = {
+        ['property.property.manage'] = true, -- register, status, metadata
+        ['property.interest.manage'] = true  -- owners, tenants, transfers
+    }
+}
+```
+
+Restart feather-property and feather-admin after changing them. A resource that
+only reads needs reader trust and no policy grants.
+
+## Database
+
+Only Property writes `feather_properties`, `feather_property_interests`,
+`feather_property_receipts`, `feather_property_events`,
+`feather_property_outbox` and `feather_property_schema_migrations`. Other
+resources must use the exports and never query these tables. Applied migrations
+are checksummed and must not be edited.
+
+## Not in this release
+
+- Property links: attaching a storage inventory or door group to a property.
+- Mortgages, liens and seizure.
+- Delegated access (guests, keys), planned for `feather-access`.
