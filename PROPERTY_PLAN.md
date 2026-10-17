@@ -110,7 +110,7 @@ tables as feather-assets.
 | P1 | Registry: register, get, find by key, status | done: release check 10/10 |
 | P2 | Interests: grant, end, transfer, check, list by holder | done: lifecycle 33/33 (transfer race, caps, expiry, retire) |
 | P3 | bcc-housing Feather port on Property, Economy, Inventory, doorlocks API, routing | live: buy, rent, co-own, sell to player and NPC, taxes, storage, deeds, hotel |
-| P4 | Door and storage adapters proven; business premises from bcc-society | second consumer |
+| P4 | Door and storage adapters proven; business premises from bcc-society | domain side done 2026-10-17: property links (`AddPropertyLink`, `RemovePropertyLink`, `FindPropertyByLink`, migration 004), `PropertyLinkSmokeTest` 17/17 with two offline characters (the owner opens the linked storage, then the new owner after a transfer); lifecycle 33/33 again. The housing and doorlocks adapters still have to use the links |
 | P5 | Access decision with feather-assets | only if grants are materially identical |
 
 ## 6. Decisions (2026-10-11)

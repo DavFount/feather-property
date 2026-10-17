@@ -232,3 +232,133 @@ Property.RegisterDevCommand('PropertyLifecycleSmokeTest', function(source, args)
         print('[PropertyLifecycleSmokeTest] FAIL ' .. tostring(reason))
     end
 end, true)
+
+-- Development-only acceptance test for property links. MUTATES DATA: it registers
+-- two uniquely keyed smoke houses, links a storage container and a door, gives
+-- the first house to one character and then to the other (as a storage or door
+-- resource would check them), and retires both houses. The characters may be
+-- offline. Never enable DevMode in production.
+--   Usage (server console):
+--   PropertyLinkSmokeTest <serverId|characterUuid> <otherServerId|otherCharacterUuid>
+Property.RegisterDevCommand('PropertyLinkSmokeTest', function(source, args)
+    if source ~= 0 then
+        return
+    end
+    local called, reason = xpcall(function()
+        local holderA, holderB = Target(args[1]), Target(args[2])
+        if not holderA or not holderB or holderA == holderB then
+            print('[PropertyLinkSmokeTest] usage: PropertyLinkSmokeTest <serverId|characterUuid> <otherServerId|otherCharacterUuid>')
+            return
+        end
+        local owner = GetCurrentResourceName()
+        local run = ('%d%04d'):format(os.time(), math.random(0, 9999))
+        local reasonCode = 'property.smoke_test'
+        local storage, door = 'smoke-storage-' .. run, 'smoke-door-' .. run
+        local passed, total = 0, 0
+        local function Check(name, condition)
+            total = total + 1
+            if condition then
+                passed = passed + 1
+            end
+            print(('[PropertyLinkSmokeTest] %-34s %s'):format(name, condition and 'PASS' or 'FAIL'))
+        end
+        local function Id(step)
+            return ('linksmoke:%s:%s'):format(run, step)
+        end
+        local function Register(suffix)
+            return PropertyRecords.Register({
+                requestId = Id('register-' .. suffix),
+                propertyKey = ('feather-property:linksmoke%s%s'):format(run, suffix),
+                propertyType = 'house',
+                label = 'Link smoke ' .. suffix,
+                reasonCode = reasonCode
+            }, owner)
+        end
+        local function Add(step, property, linkType, externalId)
+            return PropertyLinks.Add({
+                requestId = Id(step),
+                propertyId = property.propertyId,
+                expectedRevision = property.revision,
+                linkType = linkType,
+                externalId = externalId,
+                reasonCode = reasonCode
+            }, owner)
+        end
+        local function Find(externalId, resource)
+            return PropertyLinks.FindByLink({ linkType = 'storage', externalId = externalId }, resource or owner)
+        end
+
+        local a, b = Register('a'), Register('b')
+        Check('two smoke properties registered', a.ok and b.ok)
+        if not a.ok or not b.ok then
+            return print(('[PropertyLinkSmokeTest] done %d/%d passed'):format(passed, total))
+        end
+        a, b = a.value, b.value
+
+        local added = Add('add', a, 'storage', storage)
+        Check('storage linked', added.ok and #added.value.links == 1 and added.value.links[1].externalId == storage
+            and added.value.revision == a.revision + 1)
+        local replay = Add('add', a, 'storage', storage)
+        Check('request replayed', replay.ok and replay.value.replayed == true)
+        if added.ok then a = added.value end
+        local inUse = Add('add-b', b, 'storage', storage)
+        Check('linked thing cannot join another', not inUse.ok and inUse.code == 'link_in_use'
+            and inUse.details and inUse.details.propertyId == a.propertyId)
+        local twice = Add('add-twice', a, 'storage', storage)
+        Check('same link refused twice', not twice.ok and twice.code == 'link_exists')
+        local stale = PropertyLinks.Add({ requestId = Id('stale'), propertyId = a.propertyId,
+            expectedRevision = a.revision - 1, linkType = 'door', externalId = door, reasonCode = reasonCode }, owner)
+        Check('stale revision rejected', not stale.ok and stale.code == 'revision_conflict')
+        local unknown = Add('unknown', a, 'garden', storage)
+        Check('unknown link type rejected', not unknown.ok and unknown.code == 'invalid_input')
+        local found = Find(storage)
+        Check('find by link names the property', found.ok and found.value.propertyId == a.propertyId)
+        local untrusted = Find(storage, 'untrusted-smoke-caller')
+        Check('untrusted reader denied', not untrusted.ok and untrusted.code == 'authorization_denied')
+
+        -- A storage resource asks whose the container is, then whether the player holds it.
+        local function Opens(characterId)
+            local property = Find(storage)
+            if not property.ok then return false end
+            local check = PropertyInterests.Check({ propertyId = property.value.propertyId,
+                holderType = 'character', holderId = characterId }, owner)
+            return check.ok and check.value.matched == true
+        end
+        local granted = PropertyInterests.Grant({ requestId = Id('grant-a'), propertyId = a.propertyId,
+            expectedRevision = a.revision, holderType = 'character', holderId = holderA,
+            interestType = 'owner', reasonCode = reasonCode }, owner)
+        if granted.ok then a = granted.value end
+        Check('owner opens the linked storage', granted.ok and Opens(holderA) and not Opens(holderB))
+        local transferred = PropertyInterests.Transfer({ requestId = Id('transfer'), propertyId = a.propertyId,
+            expectedRevision = a.revision, toHolderType = 'character', toHolderId = holderB,
+            reasonCode = reasonCode }, owner)
+        if transferred.ok then a = transferred.value end
+        Check('new owner opens it, old owner not', transferred.ok and Opens(holderB) and not Opens(holderA)
+            and #a.links == 1)
+
+        local removed = PropertyLinks.Remove({ requestId = Id('remove'), propertyId = a.propertyId,
+            expectedRevision = a.revision, linkId = a.links[1].linkId, reasonCode = reasonCode }, owner)
+        Check('link removed', removed.ok and #removed.value.links == 0)
+        if removed.ok then a = removed.value end
+        local again = PropertyLinks.Remove({ requestId = Id('remove-again'), propertyId = a.propertyId,
+            expectedRevision = a.revision, linkId = added.value.links[1].linkId, reasonCode = reasonCode }, owner)
+        Check('removed link not found', not again.ok and again.code == 'link_not_found')
+        Check('removed link frees the thing', not Find(storage).ok)
+
+        local moved = Add('add-b-free', b, 'storage', storage)
+        if moved.ok then b = moved.value end
+        local withDoor = moved.ok and Add('add-b-door', b, 'door', door) or moved
+        if withDoor.ok then b = withDoor.value end
+        Check('freed thing links to another', moved.ok and withDoor.ok and #b.links == 2)
+        local retired = PropertyRecords.ChangeStatus({ requestId = Id('retire-b'), propertyId = b.propertyId,
+            expectedRevision = b.revision, status = 'retired', reasonCode = reasonCode }, owner)
+        Check('retiring removes its links', retired.ok and #retired.value.links == 0 and not Find(storage).ok)
+        local cleanup = PropertyRecords.ChangeStatus({ requestId = Id('retire-a'), propertyId = a.propertyId,
+            expectedRevision = a.revision, status = 'retired', reasonCode = reasonCode }, owner)
+        Check('cleanup retired', cleanup.ok)
+        print(('[PropertyLinkSmokeTest] done %d/%d passed (MUTATING: run %s)'):format(passed, total, run))
+    end, debug.traceback)
+    if not called then
+        print('[PropertyLinkSmokeTest] FAIL ' .. tostring(reason))
+    end
+end, true)

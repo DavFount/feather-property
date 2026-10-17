@@ -111,7 +111,8 @@ RegisterCommand('PropertyReleaseContractSmokeTest', function(source)
         local tests = {
             { 'service ready', health.ok and health.value.state == 'ready' },
             { 'server development disabled', Config.DevMode == false },
-            { 'development commands absent', not registered.PropertyLifecycleSmokeTest },
+            { 'development commands absent', not registered.PropertyLifecycleSmokeTest
+                and not registered.PropertyLinkSmokeTest },
             { 'authorization enabled', Config.Authorization.enabled == true },
             { 'publisher running', events.ok and events.value.running == true },
             { 'migration ledger', migrations == PropertyMigrations.Count },

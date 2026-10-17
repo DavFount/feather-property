@@ -33,7 +33,7 @@ end
 
 -- Snapshots and shared helpers -------------------------------------------------
 
-function PropertyRecords.Snapshot(row, interestRows, includeMetadata)
+function PropertyRecords.Snapshot(row, interestRows, includeMetadata, linkRows)
     if not row then
         return Err('property_not_found', 'Property not found.')
     end
@@ -57,11 +57,19 @@ function PropertyRecords.Snapshot(row, interestRows, includeMetadata)
         updatedAt = tonumber(row.updated_at_ms),
         retiredAt = row.retired_at_ms and tonumber(row.retired_at_ms) or nil,
         owners = {},
-        tenants = {}
+        tenants = {},
+        links = {}
     }
     for _, interest in ipairs(interestRows or {}) do
         local list = interest.interest_type == 'owner' and snapshot.owners or snapshot.tenants
         list[#list + 1] = InterestSnapshot(interest)
+    end
+    for _, link in ipairs(linkRows or {}) do
+        snapshot.links[#snapshot.links + 1] = {
+            linkId = link.link_id,
+            linkType = link.link_type,
+            externalId = link.external_id
+        }
     end
     if includeMetadata then
         local metadata = {}
@@ -86,7 +94,9 @@ local function ReadBy(db, where, value, includeMetadata)
     end
     local interests = db.query(selectInterests .. ' AND `property_id`=? ORDER BY `valid_from`,`interest_id`',
         row.property_id) or {}
-    return PropertyRecords.Snapshot(row, interests, includeMetadata)
+    local links = db.query([[SELECT `link_id`,`link_type`,`external_id` FROM `feather_property_links`
+        WHERE `property_id`=? ORDER BY `link_type`,`external_id`]], row.property_id) or {}
+    return PropertyRecords.Snapshot(row, interests, includeMetadata, links)
 end
 
 function PropertyRecords.Read(tx, propertyId)
@@ -240,7 +250,8 @@ end
 
 -- ChangePropertyStatus ---------------------------------------------------------
 -- active, suspended (overdue tax, seizure under review) or retired. Retiring is
--- terminal and ends every active interest in the same commit.
+-- terminal: it ends every active interest and removes every link in the same
+-- commit, so the linked storage and doors are free for another property.
 
 local statusFields = Property.Allowed({ 'propertyId', 'expectedRevision', 'status' })
 
@@ -284,7 +295,7 @@ function PropertyRecords.ChangeStatus(request, resource)
                 return Err('no_change', 'Property already has that status.')
             end
             local entries = {}
-            local endedIds = {}
+            local endedIds, removedLinkIds = {}, {}
             if request.status == 'retired' then
                 for _, interest in ipairs(PropertyRecords.LockInterests(tx, request.propertyId)) do
                     endedIds[#endedIds + 1] = interest.interest_id
@@ -315,6 +326,13 @@ function PropertyRecords.ChangeStatus(request, resource)
                         SET `status`='ended',`active_slot`=NULL,`ended_at`=CURRENT_TIMESTAMP,`revision`=`revision`+1
                         WHERE `property_id`=? AND `status`='active']], request.propertyId)
                 end
+                for _, link in ipairs(tx.query([[SELECT `link_id` FROM `feather_property_links`
+                    WHERE `property_id`=? FOR UPDATE]], request.propertyId) or {}) do
+                    removedLinkIds[#removedLinkIds + 1] = link.link_id
+                end
+                if #removedLinkIds > 0 then
+                    tx.exec('DELETE FROM `feather_property_links` WHERE `property_id`=?', request.propertyId)
+                end
                 tx.exec([[
                     UPDATE `feather_properties`
                     SET `status`='retired',`retired_at`=CURRENT_TIMESTAMP,`revision`=`revision`+1
@@ -339,7 +357,8 @@ function PropertyRecords.ChangeStatus(request, resource)
                     details = {
                         status = request.status,
                         previousStatus = row.status,
-                        endedInterestIds = #endedIds > 0 and endedIds or nil
+                        endedInterestIds = #endedIds > 0 and endedIds or nil,
+                        removedLinkIds = #removedLinkIds > 0 and removedLinkIds or nil
                     }
                 }
             }

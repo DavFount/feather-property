@@ -13,11 +13,14 @@ moves only in feather-economy; storage lives in feather-inventory.
 
 ## Status
 
-Version 0.1.0, a pre-release of Feather Contract 1. The release and lifecycle
-acceptance tests pass. A housing integration (purchases, rentals, sales between
-players and back to an agent, hotel rooms, suspension for unpaid tax) is built
-on it. The API may still change before Contract 1 is frozen; the freeze
-follows a second integration (doors and storage, or business premises).
+Version 1.0.0: Feather Contract 1 is frozen. The full public contract (exports,
+fields, errors, events, configuration, and what may and may not change) is in
+[CONTRACT.md](CONTRACT.md); within Contract 1 the API only grows, nothing
+documented changes or goes away.
+
+The release, lifecycle and links acceptance tests pass. A housing integration
+(purchases, rentals, sales between players and back to an agent, hotel rooms,
+suspension for unpaid tax) is built on it.
 
 ## Requirements
 
@@ -71,7 +74,17 @@ as character UUIDs (or server IDs of connected players).
 PropertyLifecycleSmokeTest <serverId|characterUuid> <otherServerId|otherCharacterUuid>
 ```
 
-Expect 33/33. It registers a uniquely keyed test house, grants co-owners and a
+Expect 33/33. The links test takes the same two characters (offline is fine):
+
+```text
+PropertyLinkSmokeTest <serverId|characterUuid> <otherServerId|otherCharacterUuid>
+```
+
+Expect 17/17. It links a storage container to a test house, checks replay, a
+thing linked elsewhere, stale revision and find; gives the house to the first
+character (who can then open the storage, the second cannot) and transfers it to
+the second (the other way round); then removes the link and checks that retiring
+a house frees its links. The lifecycle test registers a uniquely keyed test house, grants co-owners and a
 tenancy that expires after three seconds, races two transfers, then suspends and
 retires the house. The test runs as feather-property, so while it runs it needs
 both Property policy actions granted to `feather-property`
@@ -129,6 +142,8 @@ resource or a privileged manager.
 | `GrantInterest` | `propertyId`, `expectedRevision`, `holderType`, `holderId`, `interestType`, optional `validUntil` (Unix ms) |
 | `EndInterest` | `propertyId`, `expectedRevision`, `interestId` |
 | `TransferOwnership` | `propertyId`, `expectedRevision`, `toHolderType`, `toHolderId`, optional `fromHolderType` + `fromHolderId` (must be a current owner). Ends every owner interest and grants one; tenancies are kept. |
+| `AddPropertyLink` | `propertyId`, `expectedRevision`, `linkType`, `externalId`. Attaches an external thing (see Links). |
+| `RemovePropertyLink` | `propertyId`, `expectedRevision`, `linkId` |
 
 ### Reads
 
@@ -139,6 +154,7 @@ Trusted readers.
 | `GetProperty({ propertyId })`, `FindPropertyByKey({ propertyKey })` | The property with its current `owners` and `tenants` |
 | `ListPropertiesByHolder({ holderType, holderId, interestType?, propertyType?, includeMetadata?, limit?, cursor? })` | Properties in which the holder has an effective interest |
 | `CheckInterest({ propertyId \| propertyKey, holderType, holderId, interestType? })` | `{ matched, interests, propertyStatus }`. Facts only; the caller decides what they permit. |
+| `FindPropertyByLink({ linkType, externalId })` | The property an external thing is linked to |
 | `FindOperation({ requestId })` | The caller's stored result, for recovery after a timeout |
 | `InspectPropertyHistory({ propertyId, limit?, cursor? })` | Audit trail (trusted auditors; managers read their own properties, privileged auditors any) |
 
@@ -149,9 +165,31 @@ Lifecycle: `GetCapabilities()`, `GetHealth()`, `AwaitReady(timeoutMs)`.
 `authorization_denied`, `policy_unavailable`, `revision_conflict`
 (`details.revision`), `idempotency_conflict`, `property_exists`,
 `property_not_found`, `property_retired`, `property_unavailable`,
-`interest_exists`, `interest_limit`, `interest_not_found`, `holder_mismatch`,
+`interest_exists`, `interest_limit`, `interest_not_found`, `link_exists`, `link_in_use`, `link_not_found`,
+`link_limit`, `holder_mismatch`,
 `holder_not_found`, `no_change`, and `transaction_failed` (retry with the same
 request ID, or call `FindOperation` first).
+
+## Links
+
+A link attaches an external thing to a property: a storage container, a door, or
+another configured type (`Config.LinkTypes`, default `storage` and `door`). The
+resource that owns the thing chooses its `externalId` (an inventory container
+ID, a door ID); Property only records which property it belongs to.
+
+- One external thing belongs to at most one property: linking it elsewhere
+  returns `link_in_use` with `details.propertyId`; linking it twice to the same
+  property returns `link_exists`.
+- Adding or removing a link changes the property revision and publishes
+  `property.link.added.v1` or `property.link.removed.v1`.
+- Snapshots list a property's `links` (`linkId`, `linkType`, `externalId`).
+- Retiring a property removes its links in the same commit, so the things are
+  free for another property.
+- At most `Config.Limits.maxLinksPerProperty` links per property
+  (`link_limit`).
+
+A door or storage resource asks `FindPropertyByLink` whose a thing is, then
+`CheckInterest` for the player.
 
 ## Example
 
@@ -201,6 +239,8 @@ property.metadata.revised.v1
 property.interest.granted.v1
 property.interest.ended.v1
 property.ownership.transferred.v1
+property.link.added.v1
+property.link.removed.v1
 ```
 
 Payloads are at most 4096 bytes and never carry metadata.
@@ -245,6 +285,5 @@ are checksummed and must not be edited.
 
 ## Not in this release
 
-- Property links: attaching a storage inventory or door group to a property.
 - Mortgages, liens and seizure.
 - Delegated access (guests, keys), planned for `feather-access`.
