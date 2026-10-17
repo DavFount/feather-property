@@ -6,7 +6,7 @@ lua54 'yes'
 name 'feather-property'
 author 'Feather Framework'
 description 'Authoritative registry of real property (houses, hotel rooms, premises) and its owners and tenants for the Feather Framework'
-version '0.1.0'
+version '0.2.0'
 
 server_scripts {
     '@feather-mysql/lib/DB.lua',
@@ -15,6 +15,7 @@ server_scripts {
     'server/migrations.lua',
     'server/events.lua',
     'server/records.lua',
+    'server/links.lua',
     'server/interests.lua',
     'server/rpc.lua',
     'server/tests.lua',

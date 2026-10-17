@@ -55,7 +55,18 @@ Config = {
         maxMetadataBytes = 8192,
         maxMetadataDepth = 4,
         maxMetadataNodes = 256,
-        maxMetadataString = 1024
+        maxMetadataString = 1024,
+        -- Links (storage containers, doors, ...) one property may carry.
+        maxLinksPerProperty = 32
+    },
+
+    -- Things that can be attached to a property, each identified by an external ID
+    -- the owning resource chooses (an inventory container ID, a door ID, ...). One
+    -- external thing belongs to at most one property. Keys are stable and must
+    -- never be renamed once links exist.
+    LinkTypes = {
+        storage = { label = 'Storage' },
+        door = { label = 'Door' }
     },
 
     -- Service-level policy actions, evaluated through Core. Grants live in the

@@ -114,6 +114,27 @@ local definitions = {
                 CONSTRAINT `chk_property_outbox_status` CHECK (`status` IN ('pending','published'))
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
         }
+    },
+    {
+        id = '004_property_links',
+        statements = {
+            -- Things attached to a property (storage containers, doors). The unique
+            -- (link_type, external_id) makes one external thing belong to at most one
+            -- property; a link is removed, never edited, so it carries no revision of
+            -- its own (the property revision covers it).
+            [[CREATE TABLE IF NOT EXISTS `feather_property_links` (
+                `link_id` CHAR(36) NOT NULL,
+                `property_id` CHAR(36) NOT NULL,
+                `link_type` VARCHAR(32) NOT NULL,
+                `external_id` VARCHAR(128) NOT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`link_id`),
+                UNIQUE KEY `uq_property_link_external` (`link_type`,`external_id`),
+                KEY `idx_property_link_property` (`property_id`,`link_type`),
+                CONSTRAINT `fk_property_link_property` FOREIGN KEY (`property_id`)
+                    REFERENCES `feather_properties` (`property_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
+        }
     }
 }
 PropertyMigrations.Count = #definitions

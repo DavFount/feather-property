@@ -294,6 +294,11 @@ function Property.GetCapabilities()
         propertyTypes[#propertyTypes + 1] = key
     end
     table.sort(propertyTypes)
+    local linkTypes = {}
+    for key in pairs(Config.LinkTypes or {}) do
+        linkTypes[#linkTypes + 1] = key
+    end
+    table.sort(linkTypes)
     return Ok({
         resource = GetCurrentResourceName(),
         contract = 1,
@@ -301,6 +306,7 @@ function Property.GetCapabilities()
         state = health.state,
         propertyTypes = propertyTypes,
         interestTypes = { 'owner', 'tenant' },
+        linkTypes = linkTypes,
         features = {
             lifecycle = 1,
             health = 1,
@@ -323,7 +329,7 @@ function Property.GetCapabilities()
             references = 1,
             holderValidation = 1,
             clientSnapshot = 1,
-            links = 0,
+            links = 1,
             mortgages = 0,
             liens = 0
         }
@@ -741,8 +747,17 @@ function Property.ValidateConfig()
         or not Property.Integer(limits.maxMetadataBytes, 256, 60000)
         or not Property.Integer(limits.maxMetadataDepth, 1, 8)
         or not Property.Integer(limits.maxMetadataNodes, 1, 2048)
-        or not Property.Integer(limits.maxMetadataString, 1, 8192) then
+        or not Property.Integer(limits.maxMetadataString, 1, 8192)
+        or not Property.Integer(limits.maxLinksPerProperty, 1, 256) then
         return Err('invalid_config', 'Limit configuration is invalid.')
+    end
+    if type(Config.LinkTypes) ~= 'table' then
+        return Err('invalid_config', 'Link types are required (an empty table disables links).')
+    end
+    for key, definition in pairs(Config.LinkTypes) do
+        if not Property.Key(key, 32) or type(definition) ~= 'table' or not Property.Label(definition.label) then
+            return Err('invalid_config', 'Link type configuration is invalid.', { linkType = tostring(key) })
+        end
     end
     local types = ValidateTypes()
     if not types.ok then

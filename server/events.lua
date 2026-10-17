@@ -11,7 +11,9 @@ local names = {
     ['metadata.revised'] = 'property.metadata.revised.v1',
     ['interest.granted'] = 'property.interest.granted.v1',
     ['interest.ended'] = 'property.interest.ended.v1',
-    ['ownership.transferred'] = 'property.ownership.transferred.v1'
+    ['ownership.transferred'] = 'property.ownership.transferred.v1',
+    ['link.added'] = 'property.link.added.v1',
+    ['link.removed'] = 'property.link.removed.v1'
 }
 PropertyEvents.Names = names
 
@@ -29,7 +31,11 @@ local detailFields = {
     'previousHolderId',
     'managerResource',
     'metadataVersion',
-    'previousMetadataVersion'
+    'previousMetadataVersion',
+    'linkId',
+    'linkType',
+    'externalId',
+    'removedLinkIds'
 }
 
 -- Writes audit facts and their outbox rows inside the caller's transaction:
