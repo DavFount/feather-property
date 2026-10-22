@@ -28,10 +28,11 @@ local function EndRows(tx, interestIds, nowSeconds)
     end
 end
 
-local function BumpProperty(tx, propertyId, revision)
+local function BumpProperty(tx, propertyId, revision, ownersChanged)
     tx.exec([[
-        UPDATE `feather_properties` SET `revision`=`revision`+1
-        WHERE `property_id`=? AND `revision`=?]], propertyId, revision)
+        UPDATE `feather_properties` SET `revision`=`revision`+1,
+            `delegation_epoch`=`delegation_epoch`+?
+        WHERE `property_id`=? AND `revision`=?]], ownersChanged and 1 or 0, propertyId, revision)
 end
 
 -- GrantInterest ----------------------------------------------------------------
@@ -147,7 +148,11 @@ function PropertyInterests.Grant(request, resource)
                 interestId, request.propertyId, request.holderType, request.holderId, request.interestType,
                 Slot(request.propertyId, request.interestType, request.holderType, request.holderId), nowSeconds,
                 untilSeconds, nowSeconds)
-            BumpProperty(tx, request.propertyId, revision)
+            local ownersChanged = request.interestType == 'owner'
+            for _, expiredInterest in ipairs(expiredRows) do
+                if expiredInterest.interest_type == 'owner' then ownersChanged = true end
+            end
+            BumpProperty(tx, request.propertyId, revision, ownersChanged)
 
             -- Expired tenancies closed here are recorded like the sweep records them.
             local entries = {}
@@ -252,7 +257,7 @@ function PropertyInterests.End(request, resource)
                 return Err('interest_not_found', 'No active interest with that ID on this property.')
             end
             EndRows(tx, { target.interest_id }, Now(tx))
-            BumpProperty(tx, request.propertyId, revision)
+            BumpProperty(tx, request.propertyId, revision, target.interest_type == 'owner')
 
             PropertyEvents.Record(tx, 'interest.ended', {
                 propertyId = request.propertyId,
@@ -290,7 +295,8 @@ local transferFields = Property.Allowed({
     'toHolderType',
     'toHolderId',
     'fromHolderType',
-    'fromHolderId'
+    'fromHolderId',
+    'preservationManifestId'
 })
 
 function PropertyInterests.Transfer(request, resource)
@@ -302,13 +308,15 @@ function PropertyInterests.Transfer(request, resource)
         or not Config.HolderTypes[request.toHolderType or ''] or not Property.Uuid(request.toHolderId)
         or (request.fromHolderType == nil) ~= (request.fromHolderId == nil)
         or (request.fromHolderType ~= nil and not Config.HolderTypes[request.fromHolderType])
-        or (request.fromHolderId ~= nil and not Property.Uuid(request.fromHolderId)) then
+        or (request.fromHolderId ~= nil and not Property.Uuid(request.fromHolderId))
+        or (request.preservationManifestId~=nil and not Property.Uuid(request.preservationManifestId)) then
         return Err('invalid_input',
             'Property UUID, expected revision, new holder, and optional expected current owner required.')
     end
     request = Property.Copy(request)
     request.propertyId = request.propertyId:lower()
     request.toHolderId = request.toHolderId:lower()
+    if request.preservationManifestId then request.preservationManifestId=request.preservationManifestId:lower()end
     if request.fromHolderId then
         request.fromHolderId = request.fromHolderId:lower()
     end
@@ -322,6 +330,7 @@ function PropertyInterests.Transfer(request, resource)
         return actor
     end
 
+    local handoff
     return Property.Mutate({
         resource = resource,
         requestId = request.requestId,
@@ -331,6 +340,7 @@ function PropertyInterests.Transfer(request, resource)
             'expectedRevision',
             'toHolderType',
             'toHolderId',
+            'preservationManifestId',
             'fromHolderType',
             'fromHolderId',
             'reasonCode'
@@ -344,6 +354,11 @@ function PropertyInterests.Transfer(request, resource)
             if not holder.ok then
                 return holder
             end
+            if request.preservationManifestId then
+                local resolved=PropertyDelegation.ResolveManifest(request.preservationManifestId,request.propertyId)
+                if not resolved.ok then return resolved end
+                handoff=resolved.value
+            end
             return Ok({})
         end,
         body = function(tx)
@@ -353,6 +368,7 @@ function PropertyInterests.Transfer(request, resource)
                 return checked
             end
             local revision = checked.value
+            if handoff and tonumber(row.delegation_epoch)~=handoff.sourceEpoch then return Err('epoch_conflict','Preservation manifest ownership context changed.')end
             if row.status ~= 'active' then
                 return Err('property_unavailable', 'Only an active property can change owner.', { status = row.status })
             end
@@ -390,7 +406,7 @@ function PropertyInterests.Transfer(request, resource)
                 VALUES (?,?,?,?,'owner',?,FROM_UNIXTIME(?))]],
                 interestId, request.propertyId, request.toHolderType, request.toHolderId,
                 Slot(request.propertyId, 'owner', request.toHolderType, request.toHolderId), nowSeconds)
-            BumpProperty(tx, request.propertyId, revision)
+            BumpProperty(tx, request.propertyId, revision, true)
 
             local previous = owners[1]
             entries[1] = {
@@ -419,7 +435,11 @@ function PropertyInterests.Transfer(request, resource)
                 }
             }
             PropertyEvents.RecordMany(tx, entries)
-            return PropertyRecords.Read(tx, request.propertyId)
+            local result=PropertyRecords.Read(tx, request.propertyId)
+            if result.ok and handoff then result.value.delegationHandoff={manifestId=handoff.manifestId,
+                targetId=request.propertyId,sourceEpoch=handoff.sourceEpoch,targetEpoch=handoff.sourceEpoch+1,
+                newOwnerType=request.toHolderType,newOwnerId=request.toHolderId}end
+            return result
         end
     })
 end
@@ -510,7 +530,7 @@ local function ExpireOne(interestId)
         end
         local revision = tonumber(row.revision)
         EndRows(tx, { interestId }, Now(tx))
-        BumpProperty(tx, interest.property_id, revision)
+        BumpProperty(tx, interest.property_id, revision, interest.interest_type == 'owner')
         PropertyEvents.Record(tx, 'interest.ended', {
             propertyId = interest.property_id,
             propertyType = row.property_type,

@@ -3,7 +3,7 @@ local Ok, Err = Property.Ok, Property.Err
 
 local selectProperty = [[
     SELECT `property_id`,`property_key`,`property_type`,`label`,`status`,`manager_resource`,
-        `max_owners`,`max_tenants`,`metadata_version`,`metadata_json`,`revision`,
+        `max_owners`,`max_tenants`,`metadata_version`,`metadata_json`,`revision`,`delegation_epoch`,
         FLOOR(UNIX_TIMESTAMP(`created_at`))*1000 AS created_at_ms,
         FLOOR(UNIX_TIMESTAMP(`updated_at`))*1000 AS updated_at_ms,
         FLOOR(UNIX_TIMESTAMP(`retired_at`))*1000 AS retired_at_ms
@@ -39,7 +39,8 @@ function PropertyRecords.Snapshot(row, interestRows, includeMetadata, linkRows)
     end
     if not Property.Uuid(row.property_id) or not Property.Key(row.property_type, 32)
         or not Property.Statuses[row.status]
-        or not Property.Integer(tonumber(row.revision), 1, Property.MaxRevision + 1) then
+        or not Property.Integer(tonumber(row.revision), 1, Property.MaxRevision + 1)
+        or not Property.Integer(tonumber(row.delegation_epoch), 1, Property.MaxRevision + 1) then
         return Err('invalid_persistence', 'Persisted property is invalid.')
     end
     local snapshot = {
@@ -53,6 +54,7 @@ function PropertyRecords.Snapshot(row, interestRows, includeMetadata, linkRows)
         maxTenants = tonumber(row.max_tenants),
         metadataVersion = tonumber(row.metadata_version),
         revision = tonumber(row.revision),
+        delegationEpoch = tonumber(row.delegation_epoch),
         createdAt = tonumber(row.created_at_ms),
         updatedAt = tonumber(row.updated_at_ms),
         retiredAt = row.retired_at_ms and tonumber(row.retired_at_ms) or nil,
@@ -108,7 +110,7 @@ end
 function PropertyRecords.Lock(tx, propertyId)
     return (tx.query([[
         SELECT `property_id`,`property_key`,`property_type`,`status`,`manager_resource`,
-            `max_owners`,`max_tenants`,`metadata_version`,`revision`
+            `max_owners`,`max_tenants`,`metadata_version`,`revision`,`delegation_epoch`
         FROM `feather_properties`
         WHERE `property_id`=? FOR UPDATE]], propertyId) or {})[1]
 end
@@ -335,7 +337,8 @@ function PropertyRecords.ChangeStatus(request, resource)
                 end
                 tx.exec([[
                     UPDATE `feather_properties`
-                    SET `status`='retired',`retired_at`=CURRENT_TIMESTAMP,`revision`=`revision`+1
+                    SET `status`='retired',`retired_at`=CURRENT_TIMESTAMP,`revision`=`revision`+1,
+                        `delegation_epoch`=`delegation_epoch`+1
                     WHERE `property_id`=? AND `revision`=?]], request.propertyId, revision)
             else
                 tx.exec([[

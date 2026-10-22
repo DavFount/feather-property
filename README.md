@@ -1,5 +1,44 @@
 # Feather Property
 
+0.2.1 adds optional Access entry delegation, owner epochs and explicit post-transfer grant adoption.
+
+## Access-backed entry delegation (alpha)
+
+For explicit post-transfer adoption, call `PrepareDelegationPreservation` with
+propertyId, actorSource, requestId, reasonCode and up to25 grantId/expectedRevision
+entries. Include manifestId as `preservationManifestId` in `TransferOwnership`.
+Existing grants invalidate immediately. The authenticated new character owner
+may then `AdoptDelegationPreservation` with actorSource, requestId, reasonCode,
+manifestId, transferResource, transferRequestId and selected grants. Only the
+actual committed transfer/new owner/consecutive epochs match; adding a co-owner
+later is not transfer acceptance. Original grant IDs and expiry stay, revisions
+advance. `FindDelegationOperation({requestId=...})` recovers Access broker receipts
+for trusted readers. No uninterrupted preservation or door operation is promised.
+
+`Config.Delegation.enabled=true` registers `property.property` with exact capability
+`property.enter` in optional feather-access. `PropertyAccessStatus` reports provider
+registration; missing Access denies delegation without preventing Property startup.
+Provider re-registers after Access restart. Install matching Access/Admin policy.
+
+Trusted managers call `GrantEntryCapability` with propertyId, actorSource,
+requestId, reasonCode, granteeType/granteeId, validFrom/validUntil and optional
+organization roleIds. Any current character owner may issue/revoke; a tenant,
+system actor or organization owner alone cannot delegate. Organization-owned
+management needs a separate authority contract. RevokeEntryGrant accepts
+actorSource, grantId, expectedRevision, requestId and reasonCode. Revocation by
+current owners remains possible while suspended. Recipients gain no onward rights.
+
+Trusted readers call `CheckDelegatedEntry({propertyId=uuid, actorSource=source})`;
+check both ok and value.allowed. It evaluates grants only, separate from owner/
+tenant entitlement. It does not open doors or reserve a gameplay mutation.
+
+`delegationEpoch` advances on owner grant/end/transfer, owner expiry cleanup and
+retirement, invalidating all older grants by default. Tenant/label/metadata/status
+changes do not otherwise advance it. Suspended/retired properties deny entry.
+Expired owner interests deny delegation before the sweep commits their epoch
+change; returning owners cannot revive old grants. Preservation is not implemented.
+New migration005 adds the column without rewriting existing migrations.
+
 The authoritative registry of persistent real property for the Feather
 Framework: houses, hotel rooms, business premises, and the legal interests in
 them (owners and tenants). Property owns each property's identity, stable key,

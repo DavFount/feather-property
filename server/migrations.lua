@@ -137,6 +137,11 @@ local definitions = {
         }
     }
 }
+definitions[#definitions + 1] = {
+    id = '005_property_delegation_epoch',
+    statements = {[[ALTER TABLE `feather_properties`
+        ADD COLUMN IF NOT EXISTS `delegation_epoch` BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER `revision`]]}
+}
 PropertyMigrations.Count = #definitions
 
 local function Hash(value)

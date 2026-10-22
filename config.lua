@@ -2,7 +2,8 @@ Config = {
     Contract = 1,
     RequiredCoreContract = 1,
     ReadinessTimeoutMs = 30000,
-    DevMode = false,
+    DevMode = true,
+    Delegation = { enabled = true },
 
     Outbox = {
         pollIntervalMs = 1000,
@@ -103,3 +104,8 @@ Config = {
         }
     }
 }
+
+if Config.DevMode then
+    Config.Access.trustedReaders['feather-property-access-tests'] = true
+    Config.Access.trustedManagers['feather-property-access-tests'] = true
+end
