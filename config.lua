@@ -80,6 +80,7 @@ Config = {
 
     Access = {
         trustedReaders = {
+            ['feather-doors'] = true,
             ['feather-property'] = true,
             ['feather-admin'] = true,
             ['bcc-housing'] = true
@@ -106,6 +107,8 @@ Config = {
 }
 
 if Config.DevMode then
+    Config.Access.trustedReaders['feather-doors-property-tests'] = true
+    Config.Access.trustedManagers['feather-doors-property-tests'] = true
     Config.Access.trustedReaders['feather-property-access-tests'] = true
     Config.Access.trustedManagers['feather-property-access-tests'] = true
 end

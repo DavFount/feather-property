@@ -195,3 +195,28 @@ end
 Property.Export('AddPropertyLink', PropertyLinks.Add)
 Property.Export('RemovePropertyLink', PropertyLinks.Remove)
 Property.Export('FindPropertyByLink', PropertyLinks.FindByLink)
+
+-- One read snapshot for external authority consumers. A link UUID distinguishes
+-- unlink/relink ABA even when the same property owns the external thing again.
+function PropertyLinks.Context(request,resource)
+    local allowed=Property.CheckRead(resource)
+    if not allowed.ok then return allowed end
+    if not Property.Fields(request,{linkType=true,externalId=true}).ok
+        or not ValidLink(request.linkType,request.externalId) then return Err('invalid_input','Exact link type/external ID required.') end
+    local row=DB.one([[SELECT l.`link_id`,l.`property_id`,p.`status`,p.`delegation_epoch`,
+        EXISTS(SELECT 1 FROM `feather_property_interests` i WHERE i.`property_id`=p.`property_id`
+            AND i.`interest_type`='owner' AND i.`status`='active' AND i.`valid_until`<=CURRENT_TIMESTAMP) AS expired_owner
+        FROM `feather_property_links` l JOIN `feather_properties` p ON p.`property_id`=l.`property_id`
+        WHERE l.`link_type`=? AND l.`external_id`=?]],request.linkType,request.externalId)
+    if not row then return Err('link_not_found','No canonical link exists.') end
+    local epoch=tonumber(row.delegation_epoch)
+    if not Property.Uuid(row.link_id) or not Property.Uuid(row.property_id)
+        or not Property.Integer(epoch,1,Property.MaxRevision+1)
+        or (row.status~='active' and row.status~='suspended' and row.status~='retired')
+        or (tonumber(row.expired_owner)~=0 and tonumber(row.expired_owner)~=1) then
+        return Err('invalid_persistence','Invalid property link context.')
+    end
+    return Ok({linkId=row.link_id,propertyId=row.property_id,epoch=epoch,
+        status=tonumber(row.expired_owner)==1 and 'unavailable' or row.status})
+end
+Property.Export('GetPropertyLinkContext',PropertyLinks.Context)

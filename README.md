@@ -1,5 +1,16 @@
 # Feather Property
 
+Current version: **0.3.0** adds canonical Property link context for trusted readers and Doors binding integration.
+
+`GetPropertyLinkContext({linkType, externalId})` is a trusted-reader server API
+returning `{ok=true,value={linkId,propertyId,epoch,status}}` from one canonical
+SQL read. Epoch is Property's delegation epoch; expired owner state returns
+unavailable until cleanup. Link UUID identifies link incarnation, including
+unlink/relink to the same property. Missing links return link_not_found. Doors
+receives read-only trust; no Property manager permission. In DevMode, only the
+isolated feather-doors-property-tests caller gets fixture reader/manager trust.
+Its service principal is narrowly configured in Admin, never a player role.
+
 0.2.1 adds optional Access entry delegation, owner epochs and explicit post-transfer grant adoption.
 
 ## Access-backed entry delegation (alpha)
